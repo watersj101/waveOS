@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Shield, Wifi, Cpu, Lock, Unlock, Activity, 
-  Settings, Database, Mic, AlertTriangle, Radio, Terminal, Send
+  Settings, Database, Mic, AlertTriangle, Radio, Terminal, Send, Eye, EyeOff
 } from 'lucide-react';
 
 // --- 1. PERSISTENCE ---
@@ -30,8 +30,10 @@ export default function WaveOS() {
   const [status, setStatus] = useState("LOCKED"); 
   const [dialogue, setDialogue] = useState("WaveOS Offline.");
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showKeys, setShowKeys] = useState(false); // Toggle for plain text keys
   const [input, setInput] = useState("");
   const [isThinking, setIsThinking] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   
   // Credentials
   const [xiKey, setXiKey] = useState(() => localStorage.getItem("XI_KEY") || "");
@@ -40,9 +42,37 @@ export default function WaveOS() {
   
   const audioRef = useRef(new Audio());
 
-  // --- THE BRAIN (Gemini 1.5 Flash) ---
+  // --- VOICE INPUT ---
+  const startListening = () => {
+    if (!('webkitSpeechRecognition' in window)) {
+      return alert("Voice input not supported on this browser.");
+    }
+    const recognition = new window.webkitSpeechRecognition();
+    recognition.continuous = false;
+    recognition.lang = 'en-US';
+    setIsListening(true);
+    setStatus("LISTENING");
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(transcript);
+      askFriday(transcript);
+      setIsListening(false);
+    };
+
+    recognition.onerror = (e) => {
+      console.error(e);
+      setIsListening(false);
+      setStatus("IDLE");
+    };
+
+    recognition.onend = () => setIsListening(false);
+    recognition.start();
+  };
+
+  // --- THE BRAIN (Gemini) ---
   const askFriday = async (text) => {
-    if (!geminiKey) return alert("Missing Brain Key (Gemini)");
+    if (!geminiKey) return alert("Please enter Gemini API Key in Settings");
     setIsThinking(true);
     setStatus("THINKING");
 
@@ -58,16 +88,23 @@ export default function WaveOS() {
         })
       });
       
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error?.message || "API Error");
+      }
+
       const data = await response.json();
-      const reply = data.candidates[0].content.parts[0].text;
+      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
       
-      // Send the Brain's thought to the Voice
+      if (!reply) throw new Error("No response from brain.");
+      
+      // Speak the reply
       speak(null, reply);
       
     } catch (e) {
       console.error(e);
-      setDialogue("Neural Link Failed.");
-      setStatus("IDLE");
+      setDialogue(`Error: ${e.message}`);
+      setStatus("WARN");
     }
     setIsThinking(false);
   };
@@ -78,10 +115,8 @@ export default function WaveOS() {
     setDialogue(dynamicText || "Processing...");
 
     try {
-      // 1. Try Cache First (if ID provided)
       let blob = id ? await getAudio(id) : null;
 
-      // 2. If no cache, Stream it (Paid)
       if (!blob && dynamicText && xiKey) {
         const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${xiVoice}/stream`, {
           method: 'POST',
@@ -92,6 +127,8 @@ export default function WaveOS() {
             voice_settings: { stability: 0.8, similarity_boost: 0.8, style: 0.15 }
           })
         });
+        
+        if (!response.ok) throw new Error("Voice API Error");
         blob = await response.blob();
       }
 
@@ -103,6 +140,8 @@ export default function WaveOS() {
       }
     } catch (e) {
       setStatus("WARN");
+      // If voice fails, still show text
+      setDialogue(dynamicText || "Audio Module Failed.");
     }
   };
 
@@ -128,17 +167,34 @@ export default function WaveOS() {
       {/* ADMIN PANEL */}
       {showAdmin && (
         <div className="absolute inset-0 z-50 bg-black/95 backdrop-blur-xl p-8 flex flex-col gap-4 animate-in slide-in-from-bottom duration-300">
-          <h2 className="text-xl font-bold flex items-center gap-2 text-white"><Database/> KEYS</h2>
+          <div className="flex justify-between items-center text-white">
+            <h2 className="text-xl font-bold flex items-center gap-2"><Database/> KEYS</h2>
+            <button onClick={() => setShowKeys(!showKeys)} className="p-2 hover:text-amber-500">
+              {showKeys ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+            </button>
+          </div>
           
-          <input type="password" value={xiKey} onChange={(e) => { setXiKey(e.target.value); localStorage.setItem("XI_KEY", e.target.value); }}
-            className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none" placeholder="ElevenLabs Key" />
-            
-          <input type="text" value={xiVoice} onChange={(e) => { setXiVoice(e.target.value); localStorage.setItem("XI_VOICE", e.target.value); }}
-            className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none" placeholder="Voice ID" />
-            
-          <input type="password" value={geminiKey} onChange={(e) => { setGeminiKey(e.target.value); localStorage.setItem("GEMINI_KEY", e.target.value); }}
-            className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none" placeholder="Gemini API Key" />
-
+          <input 
+            type={showKeys ? "text" : "password"} 
+            value={xiKey} 
+            onChange={(e) => { setXiKey(e.target.value); localStorage.setItem("XI_KEY", e.target.value); }}
+            className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none font-mono" 
+            placeholder="ElevenLabs Key" 
+          />
+          <input 
+            type={showKeys ? "text" : "password"} 
+            value={xiVoice} 
+            onChange={(e) => { setXiVoice(e.target.value); localStorage.setItem("XI_VOICE", e.target.value); }}
+            className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none font-mono" 
+            placeholder="Voice ID" 
+          />
+          <input 
+            type={showKeys ? "text" : "password"} 
+            value={geminiKey} 
+            onChange={(e) => { setGeminiKey(e.target.value); localStorage.setItem("GEMINI_KEY", e.target.value); }}
+            className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none font-mono" 
+            placeholder="Gemini API Key" 
+          />
           <button onClick={() => setShowAdmin(false)} className="mt-auto py-6 text-xs uppercase opacity-50">[ CLOSE ]</button>
         </div>
       )}
@@ -155,6 +211,7 @@ export default function WaveOS() {
           className={`w-36 h-36 rounded-full flex items-center justify-center backdrop-blur-md border border-amber-500/40 bg-amber-500/5`}
         >
           {status === "THINKING" ? <Activity className="w-12 h-12 animate-spin"/> :
+           status === "LISTENING" ? <Mic className="w-12 h-12 animate-pulse text-white"/> :
            status === "SPEAKING" ? <Radio className="w-12 h-12 animate-pulse"/> :
            <Lock className="w-10 h-10 opacity-50"/>}
         </motion.div>
@@ -172,6 +229,13 @@ export default function WaveOS() {
 
       {/* INPUT TERMINAL */}
       <div className="absolute bottom-10 w-full px-6 max-w-md flex gap-2">
+        <button 
+          onClick={startListening}
+          className={`p-4 border ${isListening ? 'bg-amber-500 text-black border-amber-500' : 'bg-black border-amber-500/30 text-amber-500'} transition-all`}
+        >
+          <Mic className="w-5 h-5" />
+        </button>
+
         <div className="flex-1 relative">
           <input 
             type="text" 
@@ -181,9 +245,6 @@ export default function WaveOS() {
             className="w-full bg-black border border-amber-500/30 rounded-none p-4 text-amber-500 placeholder-amber-500/30 focus:border-amber-500 outline-none uppercase tracking-widest text-sm"
             placeholder="ENTER COMMAND..."
           />
-          <div className="absolute right-0 top-0 h-full flex items-center pr-3 pointer-events-none">
-            <span className="animate-pulse bg-amber-500 w-2 h-4 block"></span>
-          </div>
         </div>
         <button 
           onClick={() => { askFriday(input); setInput(""); }}
