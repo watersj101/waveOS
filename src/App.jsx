@@ -2,14 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Shield, Wifi, Cpu, Lock, Unlock, Activity, 
-  Settings, Database, Mic, AlertTriangle, Radio, Terminal
+  Settings, Database, Mic, AlertTriangle, Radio, Terminal, Send
 } from 'lucide-react';
 
-// --- 1. PERSISTENT MEMORY (IndexedDB) ---
-// This saves your generated voice files so they don't cost money to reload.
+// --- 1. PERSISTENCE ---
 const DB_NAME = "WaveOS_Core";
 const STORE_NAME = "AudioBuffer";
-
 const dbPromise = new Promise((resolve) => {
   if (typeof window === 'undefined') return resolve(null);
   const request = window.indexedDB.open(DB_NAME, 1);
@@ -17,14 +15,6 @@ const dbPromise = new Promise((resolve) => {
   request.onsuccess = () => resolve(request.result);
   request.onerror = () => resolve(null);
 });
-
-async function saveAudio(id, blob) {
-  const db = await dbPromise;
-  if(!db) return;
-  const tx = db.transaction(STORE_NAME, "readwrite");
-  tx.objectStore(STORE_NAME).put(blob, id);
-}
-
 async function getAudio(id) {
   const db = await dbPromise;
   if(!db) return null;
@@ -36,45 +26,66 @@ async function getAudio(id) {
   });
 }
 
-// --- 2. WAVE OS COMPONENT ---
 export default function WaveOS() {
-  const [status, setStatus] = useState("LOCKED"); // LOCKED, IDLE, SPEAKING, WARN
-  const [dialogue, setDialogue] = useState("WaveOS Offline. Authentication Required.");
+  const [status, setStatus] = useState("LOCKED"); 
+  const [dialogue, setDialogue] = useState("WaveOS Offline.");
   const [showAdmin, setShowAdmin] = useState(false);
+  const [input, setInput] = useState("");
+  const [isThinking, setIsThinking] = useState(false);
   
-  // Persistence Keys
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem("XI_KEY") || "");
-  const [voiceId, setVoiceId] = useState(() => localStorage.getItem("XI_VOICE") || "");
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [genProgress, setGenProgress] = useState("");
-
+  // Credentials
+  const [xiKey, setXiKey] = useState(() => localStorage.getItem("XI_KEY") || "");
+  const [xiVoice, setXiVoice] = useState(() => localStorage.getItem("XI_VOICE") || "");
+  const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem("GEMINI_KEY") || "");
+  
   const audioRef = useRef(new Audio());
 
-  // THE SCRIPT: Edit these lines to change Friday's responses
-  const PROTOCOLS = {
-    "boot": "Wave OS Online. Systems nominal.",
-    "welcome": "Identity confirmed. Welcome back, Boss.",
-    "denied": "Access denied. Biometrics do not match.",
-    "threat": "Threat detected. Shields up.",
-    "focus": "Focus mode active. Disturbances muted."
-  };
-
-  // --- VOICE LOGIC ---
-  const speak = async (id, dynamicText = "") => {
-    setStatus("SPEAKING");
-    if (dynamicText) setDialogue(dynamicText);
-    else setDialogue(PROTOCOLS[id] || "Processing...");
+  // --- THE BRAIN (Gemini 1.5 Flash) ---
+  const askFriday = async (text) => {
+    if (!geminiKey) return alert("Missing Brain Key (Gemini)");
+    setIsThinking(true);
+    setStatus("THINKING");
 
     try {
-      // 1. Check Local "Hard Drive" (Free)
-      let blob = await getAudio(id);
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text }] }],
+          systemInstruction: {
+            parts: [{ text: "You are F.R.I.D.A.Y, a tactical AI OS. User is 'Boss'. Keep responses extremely concise (under 2 sentences). Tone: Professional, Irish, Crisp, slightly dry/sarcastic if appropriate. No emojis." }]
+          }
+        })
+      });
+      
+      const data = await response.json();
+      const reply = data.candidates[0].content.parts[0].text;
+      
+      // Send the Brain's thought to the Voice
+      speak(null, reply);
+      
+    } catch (e) {
+      console.error(e);
+      setDialogue("Neural Link Failed.");
+      setStatus("IDLE");
+    }
+    setIsThinking(false);
+  };
 
-      // 2. If not found, and we have custom text, call API (Paid)
-      if (!blob && dynamicText && apiKey) {
-        console.log("Stream Request Sent...");
-        const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`, {
+  // --- THE VOICE (ElevenLabs) ---
+  const speak = async (id, dynamicText = "") => {
+    setStatus("SPEAKING");
+    setDialogue(dynamicText || "Processing...");
+
+    try {
+      // 1. Try Cache First (if ID provided)
+      let blob = id ? await getAudio(id) : null;
+
+      // 2. If no cache, Stream it (Paid)
+      if (!blob && dynamicText && xiKey) {
+        const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${xiVoice}/stream`, {
           method: 'POST',
-          headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
+          headers: { 'xi-api-key': xiKey, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             text: dynamicText,
             model_id: "eleven_turbo_v2_5",
@@ -87,185 +98,99 @@ export default function WaveOS() {
       if (blob) {
         const url = URL.createObjectURL(blob);
         audioRef.current.src = url;
-        audioRef.current.play().catch(e => console.error("Play Error:", e));
+        audioRef.current.play();
         audioRef.current.onended = () => setStatus("IDLE");
-      } else {
-        console.warn(`Audio ID '${id}' missing.`);
-        setStatus("IDLE");
       }
     } catch (e) {
-      console.error(e);
       setStatus("WARN");
-      setDialogue("Audio System Failure.");
     }
   };
 
-  // --- ASSET GENERATOR ---
-  const initializeProtocols = async () => {
-    if (!apiKey || !voiceId) return alert("Credentials Missing");
-    setIsGenerating(true);
-
-    const keys = Object.keys(PROTOCOLS);
-    for (let i = 0; i < keys.length; i++) {
-      const id = keys[i];
-      setGenProgress(`${i + 1}/${keys.length}: ${id}`);
-      
-      try {
-        const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-          method: 'POST',
-          headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text: PROTOCOLS[id],
-            model_id: "eleven_turbo_v2_5",
-            voice_settings: { stability: 0.8, similarity_boost: 0.8, style: 0.15 }
-          })
-        });
-        
-        if (!response.ok) throw new Error("API Error");
-        const blob = await response.blob();
-        await saveAudio(id, blob); // Save to IndexedDB
-      } catch (e) {
-        setDialogue(`Error: ${e.message}`);
-        setIsGenerating(false);
-        return;
-      }
-    }
-    setGenProgress("Complete");
-    setDialogue("Protocols Cached.");
-    setIsGenerating(false);
-  };
-
-  // --- RENDER ---
   return (
     <div className="relative w-full h-screen bg-black text-amber-500 font-mono overflow-hidden flex flex-col items-center justify-center select-none">
       
-      {/* BACKGROUND EFFECTS */}
+      {/* BACKGROUND */}
       <div className="absolute inset-0 opacity-20 pointer-events-none" 
            style={{ backgroundImage: 'radial-gradient(circle, #f59e0b 1px, transparent 1px)', backgroundSize: '40px 40px' }}>
       </div>
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_10%,black_100%)]" />
 
       {/* HEADER */}
       <div className="absolute top-0 w-full p-6 flex justify-between items-center z-40">
         <div className="flex gap-4 text-xs font-bold tracking-widest opacity-80">
-          <div className="flex items-center gap-2"><Cpu className="w-3 h-3"/> FRIDAY OS</div>
-          <div className="flex items-center gap-2"><Wifi className="w-3 h-3"/> NET: SECURE</div>
+          <div className="flex items-center gap-2"><Cpu className="w-3 h-3"/> FRIDAY</div>
+          <div className="flex items-center gap-2"><Wifi className="w-3 h-3"/> {status}</div>
         </div>
         <button onClick={() => setShowAdmin(!showAdmin)} className="p-2 opacity-50 hover:opacity-100">
           <Settings className="w-5 h-5" />
         </button>
       </div>
 
-      {/* ADMIN TERMINAL */}
+      {/* ADMIN PANEL */}
       {showAdmin && (
-        <div className="absolute inset-0 z-50 bg-black/95 backdrop-blur-xl p-8 flex flex-col gap-6 animate-in slide-in-from-bottom duration-300">
-          <h2 className="text-xl font-bold flex items-center gap-2 text-white"><Terminal/> SYSTEM CONFIG</h2>
+        <div className="absolute inset-0 z-50 bg-black/95 backdrop-blur-xl p-8 flex flex-col gap-4 animate-in slide-in-from-bottom duration-300">
+          <h2 className="text-xl font-bold flex items-center gap-2 text-white"><Database/> KEYS</h2>
           
-          <div className="space-y-1">
-            <label className="text-[10px] uppercase opacity-50 tracking-widest">ElevenLabs API Key</label>
-            <input 
-              type="password" 
-              value={apiKey}
-              onChange={(e) => { setApiKey(e.target.value); localStorage.setItem("XI_KEY", e.target.value); }}
-              className="w-full bg-amber-500/10 border border-amber-500/20 p-4 rounded text-amber-500 text-sm focus:border-amber-500 outline-none placeholder-amber-500/20"
-              placeholder="Paste Key..." 
-            />
-          </div>
+          <input type="password" value={xiKey} onChange={(e) => { setXiKey(e.target.value); localStorage.setItem("XI_KEY", e.target.value); }}
+            className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none" placeholder="ElevenLabs Key" />
+            
+          <input type="text" value={xiVoice} onChange={(e) => { setXiVoice(e.target.value); localStorage.setItem("XI_VOICE", e.target.value); }}
+            className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none" placeholder="Voice ID" />
+            
+          <input type="password" value={geminiKey} onChange={(e) => { setGeminiKey(e.target.value); localStorage.setItem("GEMINI_KEY", e.target.value); }}
+            className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none" placeholder="Gemini API Key" />
 
-          <div className="space-y-1">
-            <label className="text-[10px] uppercase opacity-50 tracking-widest">Voice ID</label>
-            <input 
-              type="text" 
-              value={voiceId}
-              onChange={(e) => { setVoiceId(e.target.value); localStorage.setItem("XI_VOICE", e.target.value); }}
-              className="w-full bg-amber-500/10 border border-amber-500/20 p-4 rounded text-amber-500 text-sm focus:border-amber-500 outline-none placeholder-amber-500/20"
-              placeholder="Paste ID..." 
-            />
-          </div>
-
-          <div className="p-4 border border-amber-500/20 rounded bg-amber-500/5 mt-4">
-            <div className="flex justify-between items-center mb-2">
-               <h3 className="font-bold text-sm">Protocol Cache</h3>
-               <span className="text-xs font-bold">{genProgress}</span>
-            </div>
-            <button 
-              onClick={initializeProtocols}
-              disabled={isGenerating}
-              className="w-full py-4 bg-amber-600 text-black font-bold uppercase tracking-widest rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-amber-500 transition-colors"
-            >
-              {isGenerating ? "CACHING..." : "INITIALIZE PROTOCOLS"}
-            </button>
-            <p className="text-[10px] mt-2 opacity-50 text-center">Downloads voice assets to local storage.</p>
-          </div>
-
-          <button onClick={() => setShowAdmin(false)} className="mt-auto py-6 text-xs uppercase opacity-50 hover:opacity-100">
-            [ Close Terminal ]
-          </button>
+          <button onClick={() => setShowAdmin(false)} className="mt-auto py-6 text-xs uppercase opacity-50">[ CLOSE ]</button>
         </div>
       )}
 
-      {/* THE EYE (HUD) */}
+      {/* VISUAL CORE */}
       <div className="relative z-10 w-full max-w-sm aspect-square flex items-center justify-center">
-        {/* Rings */}
-        <motion.div 
-          animate={{ rotate: 360 }}
-          transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
-          className="absolute w-[85%] h-[85%] border border-amber-500/20 rounded-full border-dashed"
-        />
-        <motion.div 
-          animate={{ rotate: -360 }}
-          transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-          className="absolute w-[70%] h-[70%] border-2 border-amber-500/30 rounded-full border-t-transparent border-l-transparent"
-        />
-
-        {/* Core */}
+        <motion.div animate={{ rotate: 360 }} transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
+          className="absolute w-[85%] h-[85%] border border-amber-500/20 rounded-full border-dashed" />
+        <motion.div animate={{ rotate: -360 }} transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+          className="absolute w-[70%] h-[70%] border-2 border-amber-500/30 rounded-full border-t-transparent border-l-transparent" />
+        
         <motion.div
-          animate={{ 
-            scale: status === "SPEAKING" ? [1, 1.1, 1] : 1,
-            opacity: status === "SPEAKING" ? 1 : 0.6,
-            boxShadow: status === "SPEAKING" ? "0 0 50px rgba(245, 158, 11, 0.4)" : "0 0 0px transparent"
-          }}
-          className={`w-36 h-36 rounded-full flex items-center justify-center backdrop-blur-md border border-amber-500/40 bg-amber-500/5 transition-all duration-500`}
+          animate={{ scale: status === "SPEAKING" || status === "THINKING" ? [1, 1.1, 1] : 1, opacity: 1 }}
+          className={`w-36 h-36 rounded-full flex items-center justify-center backdrop-blur-md border border-amber-500/40 bg-amber-500/5`}
         >
-          {status === "LOCKED" ? <Lock className="w-10 h-10 opacity-70"/> : 
-           status === "WARN" ? <AlertTriangle className="w-12 h-12 text-red-500"/> :
+          {status === "THINKING" ? <Activity className="w-12 h-12 animate-spin"/> :
            status === "SPEAKING" ? <Radio className="w-12 h-12 animate-pulse"/> :
-           <Activity className="w-12 h-12"/>
-          }
+           <Lock className="w-10 h-10 opacity-50"/>}
         </motion.div>
       </div>
 
       {/* DIALOGUE */}
       <div className="h-24 px-6 flex items-center justify-center text-center w-full max-w-md">
         <AnimatePresence mode="wait">
-          <motion.div
-            key={dialogue}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className={`text-lg md:text-xl font-light tracking-wide ${status === "WARN" ? "text-red-400" : "text-amber-100"} drop-shadow-md`}
-          >
+          <motion.div key={dialogue} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+            className="text-lg md:text-xl font-light tracking-wide text-amber-100 drop-shadow-md">
             "{dialogue}"
           </motion.div>
         </AnimatePresence>
       </div>
 
-      {/* ACTIONS */}
-      <div className="absolute bottom-16 flex flex-col gap-4 z-30 w-64">
+      {/* INPUT TERMINAL */}
+      <div className="absolute bottom-10 w-full px-6 max-w-md flex gap-2">
+        <div className="flex-1 relative">
+          <input 
+            type="text" 
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && (askFriday(input), setInput(""))}
+            className="w-full bg-black border border-amber-500/30 rounded-none p-4 text-amber-500 placeholder-amber-500/30 focus:border-amber-500 outline-none uppercase tracking-widest text-sm"
+            placeholder="ENTER COMMAND..."
+          />
+          <div className="absolute right-0 top-0 h-full flex items-center pr-3 pointer-events-none">
+            <span className="animate-pulse bg-amber-500 w-2 h-4 block"></span>
+          </div>
+        </div>
         <button 
-          onClick={() => {
-             if(status === "LOCKED") {
-                setStatus("IDLE");
-                speak("welcome");
-             } else {
-                setStatus("LOCKED");
-                setDialogue("System Offline.");
-             }
-          }}
-          className="group relative px-6 py-4 bg-black border border-amber-500/40 text-amber-500 uppercase text-xs font-bold tracking-[0.2em] transition-all hover:border-amber-500 active:scale-95"
+          onClick={() => { askFriday(input); setInput(""); }}
+          disabled={!input || isThinking}
+          className="bg-amber-600/20 border border-amber-500/30 p-4 text-amber-500 hover:bg-amber-500 hover:text-black transition-all"
         >
-          <span className="absolute inset-0 w-full h-full bg-amber-500/10 scale-x-0 group-hover:scale-x-100 transition-transform origin-left duration-300"/>
-          <span className="relative z-10">{status === "LOCKED" ? "INITIALIZE" : "SHUTDOWN"}</span>
+          <Send className="w-5 h-5" />
         </button>
       </div>
 
