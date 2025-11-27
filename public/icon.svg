@@ -1,0 +1,26 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- BACKGROUND: Deep Matte Black -->
+  <circle cx="256" cy="256" r="256" fill="#09090b"/>
+  
+  <!-- OUTER RING: Dark Grey Tactile Ridge -->
+  <circle cx="256" cy="256" r="220" stroke="#27272a" stroke-width="12"/>
+  
+  <!-- INNER GLOW: Subtle Amber Ambient Light -->
+  <circle cx="256" cy="256" r="180" fill="url(#paint0_radial_amber)" fill-opacity="0.1"/>
+  
+  <!-- THE WAVE: Sharp, Technical, Data-Driven -->
+  <path d="M106 256L146 256L176 186C178.609 179.913 187.391 179.913 190 186L236 296L276 206L316 336C318.609 342.087 327.391 342.087 330 336L366 256H406" 
+        stroke="#F59E0B" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- ACCENTS: Data Dots -->
+  <circle cx="256" cy="120" r="8" fill="#F59E0B" fill-opacity="0.5"/>
+  <circle cx="256" cy="392" r="8" fill="#F59E0B" fill-opacity="0.5"/>
+
+  <!-- GRADIENT DEFINITIONS -->
+  <defs>
+    <radialGradient id="paint0_radial_amber" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(256 256) rotate(90) scale(180)">
+      <stop stop-color="#F59E0B"/>
+      <stop offset="1" stop-color="#F59E0B" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+</svg>
