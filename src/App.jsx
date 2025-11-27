@@ -5,7 +5,7 @@ import {
   Settings, Database, Mic, AlertTriangle, Radio, Terminal, Send, Eye, EyeOff, Scan
 } from 'lucide-react';
 
-// --- 1. PERSISTENCE ---
+// --- 1. PERSISTENCE (Phone Storage) ---
 const DB_NAME = "WaveOS_Core";
 const STORE_NAME = "AudioBuffer";
 const dbPromise = new Promise((resolve) => {
@@ -36,15 +36,16 @@ export default function WaveOS() {
   const [isListening, setIsListening] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   
+  // Credentials
   const [xiKey, setXiKey] = useState(() => localStorage.getItem("XI_KEY") || "");
   const [xiVoice, setXiVoice] = useState(() => localStorage.getItem("XI_VOICE") || "");
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem("GEMINI_KEY") || "");
   
   const audioRef = useRef(new Audio());
 
-  // --- NFC READER ---
+  // --- NFC READER (Sticker Logic) ---
   const scanNFC = async () => {
-    if (!('NDEFReader' in window)) return alert("NFC not supported.");
+    if (!('NDEFReader' in window)) return alert("NFC not supported on this device.");
     setStatus("SCANNING");
     setDialogue("Approach Security Tag...");
     setIsScanning(true);
@@ -58,12 +59,12 @@ export default function WaveOS() {
         speak("welcome", "Access granted. Welcome back, Boss.");
       };
     } catch (error) {
-      setDialogue("NFC Error.");
+      setDialogue("NFC Error: " + error.message);
       setIsScanning(false);
     }
   };
 
-  // --- VOICE INPUT ---
+  // --- VOICE INPUT (Web Speech API) ---
   const startListening = () => {
     if (!('webkitSpeechRecognition' in window)) return alert("Voice input unavailable.");
     const recognition = new window.webkitSpeechRecognition();
@@ -75,7 +76,7 @@ export default function WaveOS() {
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       setInput(transcript);
-      askFriday(transcript); // Send directly to brain
+      askFriday(transcript); // Send to brain
       setIsListening(false);
     };
     recognition.onerror = () => { setIsListening(false); setStatus("IDLE"); };
@@ -83,14 +84,15 @@ export default function WaveOS() {
     recognition.start();
   };
 
-  // --- THE BRAIN (Gemini with Fallback) ---
+  // --- THE BRAIN (DEBUG VERSION) ---
   const askFriday = async (text) => {
     if (!geminiKey) return alert("Missing Gemini Key");
     setIsThinking(true);
     setStatus("THINKING");
 
-    const callGemini = async (modelName) => {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`, {
+    try {
+      // Using 'gemini-1.5-flash-latest' which is more stable
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -100,31 +102,27 @@ export default function WaveOS() {
           }
         })
       });
-      if (!response.ok) throw new Error(response.statusText);
-      return response.json();
-    };
 
-    try {
-      // 1. Try Flash Latest
-      let data = await callGemini("gemini-1.5-flash-latest");
-      let reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      speak(null, reply);
-    } catch (e) {
-      console.warn("Flash failed, trying Pro...", e);
-      try {
-        // 2. Fallback to Gemini Pro (Stable)
-        let data = await callGemini("gemini-pro");
-        let reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        speak(null, reply);
-      } catch (err2) {
-        setDialogue("Neural Link Failed. Check API Key.");
+      const data = await response.json();
+
+      // DEBUG: If Google sent an error, show it to the user
+      if (data.error) {
+        console.error("Gemini Error:", data.error);
+        setDialogue(`API Error: ${data.error.message}`);
         setStatus("WARN");
+      } else {
+        const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        speak(null, reply);
       }
+      
+    } catch (e) {
+      setDialogue(`Network Error: ${e.message}`);
+      setStatus("WARN");
     }
     setIsThinking(false);
   };
 
-  // --- THE VOICE ---
+  // --- THE VOICE (ElevenLabs) ---
   const speak = async (id, dynamicText = "") => {
     setStatus("SPEAKING");
     setDialogue(dynamicText || "Processing...");
@@ -136,6 +134,7 @@ export default function WaveOS() {
           headers: { 'xi-api-key': xiKey, 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: dynamicText, model_id: "eleven_turbo_v2_5" })
         });
+        if (!response.ok) throw new Error("Voice API Error");
         blob = await response.blob();
       }
       if (blob) {
@@ -143,7 +142,10 @@ export default function WaveOS() {
         audioRef.current.play();
         audioRef.current.onended = () => setStatus("IDLE");
       }
-    } catch (e) { setStatus("WARN"); }
+    } catch (e) { 
+      setStatus("WARN"); 
+      setDialogue("Audio System Failure.");
+    }
   };
 
   return (
