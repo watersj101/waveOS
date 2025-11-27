@@ -7,14 +7,14 @@ import {
   Settings, Database, Mic, AlertTriangle, Radio, Terminal, Send, Eye, EyeOff, Scan, Server, Image as ImageIcon, Zap, Aperture, Cloud, Save
 } from 'lucide-react';
 
-// --- FIREBASE CONFIGURATION (PASTE YOUR KEYS HERE) ---
+// --- YOUR FIREBASE CONFIGURATION ---
 const firebaseConfig = {
-  apiKey: "PASTE_API_KEY_HERE",
-  authDomain: "PASTE_AUTH_DOMAIN_HERE",
-  projectId: "PASTE_PROJECT_ID_HERE",
-  storageBucket: "PASTE_STORAGE_BUCKET_HERE",
-  messagingSenderId: "PASTE_SENDER_ID_HERE",
-  appId: "PASTE_APP_ID_HERE"
+  apiKey: "AIzaSyDcm_jppsUKhc_IfCYgzOLjhyiyxPoiBBQ",
+  authDomain: "waveos-memory.firebaseapp.com",
+  projectId: "waveos-memory",
+  storageBucket: "waveos-memory.firebasestorage.app",
+  messagingSenderId: "317187959380",
+  appId: "1:317187959380:web:ebbca6cce074f65f949bc1"
 };
 
 // Initialize Cloud
@@ -96,6 +96,35 @@ export default function WaveOS() {
 
   const audioRef = useRef(new Audio());
   const fileInputRef = useRef(null);
+
+  // --- DIAGNOSTIC TOOL ---
+  const checkAvailableModels = async () => {
+    if (!geminiKey) return alert("Enter Gemini Key first");
+    setDialogue("SCANNING API...");
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey}`);
+      const data = await response.json();
+      
+      if (data.models) {
+        const validModels = data.models
+          .filter(m => m.supportedGenerationMethods.includes("generateContent"))
+          .map(m => m.name.replace("models/", ""));
+        
+        alert("AVAILABLE MODELS:\n\n" + validModels.join("\n"));
+        // Auto-select 'flash' model
+        const bestMatch = validModels.find(m => m.includes("gemini-2.0-flash")) || validModels.find(m => m.includes("gemini-1.5-flash")) || validModels[0];
+        if(bestMatch) {
+            setModelName(bestMatch);
+            localStorage.setItem("GEMINI_MODEL", bestMatch);
+            setDialogue(`ROUTE OPTIMIZED: ${bestMatch}`);
+        }
+      } else {
+        alert("Error: " + JSON.stringify(data));
+      }
+    } catch (e) {
+      alert("Network Error: " + e.message);
+    }
+  };
 
   // --- CLOUD SYNC LOGIC ---
   const syncMemory = async (tagId) => {
@@ -277,7 +306,7 @@ export default function WaveOS() {
       {/* DIALOGUE */}
       <div className="h-32 px-8 flex items-center justify-center text-center w-full max-w-lg z-20">
         <AnimatePresence mode="wait">
-          <motion.div key={dialogue} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-lg md:text-2xl font-light tracking-wide drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]">"{dialogue}"</motion.div>
+          <motion.div key={dialogue} initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -10, scale: 1.05 }} className="text-lg md:text-2xl font-light tracking-wide drop-shadow-[0_0_10px_rgba(255,255,255,0.3)]">"{dialogue}"</motion.div>
         </AnimatePresence>
       </div>
 
@@ -307,17 +336,30 @@ export default function WaveOS() {
               <textarea value={userBio} onChange={(e) => { setUserBio(e.target.value); }} className="w-full h-32 bg-white/5 border border-white/10 p-4 rounded-lg text-sm outline-none font-mono focus:border-amber-500/50 transition-colors" placeholder="Define Operator Identity..." />
               <button onClick={saveMemoryToCloud} className="mt-2 w-full py-2 bg-amber-500/20 text-amber-500 rounded text-xs font-bold uppercase hover:bg-amber-500/30 flex items-center justify-center gap-2"><Save className="w-3 h-3"/> Save to Cloud</button>
             </div>
+
             <div className="group">
               <label className="text-[10px] uppercase opacity-40 font-bold tracking-widest mb-1 block">API KEYS</label>
               <input type={showKeys ? "text" : "password"} value={xiKey} onChange={(e) => { setXiKey(e.target.value); localStorage.setItem("XI_KEY", e.target.value); }} className="w-full bg-white/5 border border-white/10 p-4 rounded-lg text-sm outline-none font-mono mb-2" placeholder="ElevenLabs" />
               <input type={showKeys ? "text" : "password"} value={geminiKey} onChange={(e) => { setGeminiKey(e.target.value); localStorage.setItem("GEMINI_KEY", e.target.value); }} className="w-full bg-white/5 border border-white/10 p-4 rounded-lg text-sm outline-none font-mono" placeholder="Gemini" />
+              <input type={showKeys ? "text" : "password"} value={xiVoice} onChange={(e) => { setXiVoice(e.target.value); localStorage.setItem("XI_VOICE", e.target.value); }} className="w-full bg-white/5 border border-white/10 p-4 rounded-lg text-sm outline-none font-mono" placeholder="Voice ID" />
+            </div>
+
+            <div className="group">
+              <label className="text-[10px] uppercase opacity-40 font-bold tracking-widest mb-1 block">BRAIN MODEL</label>
+              <div className="flex gap-2">
+                <input type="text" value={modelName} onChange={(e) => { setModelName(e.target.value); localStorage.setItem("GEMINI_MODEL", e.target.value); }} className="flex-1 bg-white/5 border border-white/10 p-4 rounded-lg text-sm outline-none font-mono" placeholder="gemini-1.5-flash" />
+                <button onClick={checkAvailableModels} className="bg-amber-600/20 border border-amber-500/30 p-3 rounded text-amber-500"><Server className="w-5 h-5"/></button>
+              </div>
             </div>
           </div>
+
           <button onClick={() => setShowAdmin(false)} className="mt-auto w-full py-4 border border-white/20 rounded-lg text-xs uppercase hover:bg-white/10 transition-colors">[ CLOSE TERMINAL ]</button>
         </div>
       )}
+
     </div>
   );
 }
 
 
+          
