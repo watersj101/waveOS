@@ -1,7 +1,7 @@
 {
   "name": "wave-os-friday",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,7 +12,8 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "framer-motion": "^10.16.4",
-    "lucide-react": "^0.292.0"
+    "lucide-react": "^0.292.0",
+    "firebase": "^10.7.1"
   },
   "devDependencies": {
     "@types/react": "^18.2.37",
