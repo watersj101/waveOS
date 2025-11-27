@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Shield, Wifi, Cpu, Lock, Unlock, Activity, 
-  Settings, Database, Mic, AlertTriangle, Radio, Terminal, Send, Eye, EyeOff, Scan
+  Settings, Database, Mic, AlertTriangle, Radio, Terminal, Send, Eye, EyeOff, Scan, Server
 } from 'lucide-react';
 
-// --- 1. PERSISTENCE (Phone Storage) ---
+// --- 1. PERSISTENCE ---
 const DB_NAME = "WaveOS_Core";
 const STORE_NAME = "AudioBuffer";
 const dbPromise = new Promise((resolve) => {
@@ -40,12 +40,44 @@ export default function WaveOS() {
   const [xiKey, setXiKey] = useState(() => localStorage.getItem("XI_KEY") || "");
   const [xiVoice, setXiVoice] = useState(() => localStorage.getItem("XI_VOICE") || "");
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem("GEMINI_KEY") || "");
+  // Default to a safe fallback, but allow user override
+  const [modelName, setModelName] = useState(() => localStorage.getItem("GEMINI_MODEL") || "gemini-1.5-flash");
   
   const audioRef = useRef(new Audio());
 
-  // --- NFC READER (Sticker Logic) ---
+  // --- DIAGNOSTIC TOOL: LIST MODELS ---
+  const checkAvailableModels = async () => {
+    if (!geminiKey) return alert("Enter Gemini Key first");
+    setDialogue("Scanning Google API for available models...");
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${geminiKey}`);
+      const data = await response.json();
+      
+      if (data.models) {
+        // Filter for 'generateContent' supported models
+        const validModels = data.models
+          .filter(m => m.supportedGenerationMethods.includes("generateContent"))
+          .map(m => m.name.replace("models/", ""));
+        
+        alert("AVAILABLE MODELS:\n\n" + validModels.join("\n"));
+        // Auto-select the first 'flash' model found if current one is invalid
+        const bestMatch = validModels.find(m => m.includes("flash")) || validModels[0];
+        if(bestMatch) {
+            setModelName(bestMatch);
+            localStorage.setItem("GEMINI_MODEL", bestMatch);
+            setDialogue(`Model updated to: ${bestMatch}`);
+        }
+      } else {
+        alert("Error: " + JSON.stringify(data));
+      }
+    } catch (e) {
+      alert("Network Error: " + e.message);
+    }
+  };
+
+  // --- NFC READER ---
   const scanNFC = async () => {
-    if (!('NDEFReader' in window)) return alert("NFC not supported on this device.");
+    if (!('NDEFReader' in window)) return alert("NFC not supported.");
     setStatus("SCANNING");
     setDialogue("Approach Security Tag...");
     setIsScanning(true);
@@ -64,7 +96,7 @@ export default function WaveOS() {
     }
   };
 
-  // --- VOICE INPUT (Web Speech API) ---
+  // --- VOICE INPUT ---
   const startListening = () => {
     if (!('webkitSpeechRecognition' in window)) return alert("Voice input unavailable.");
     const recognition = new window.webkitSpeechRecognition();
@@ -76,7 +108,7 @@ export default function WaveOS() {
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       setInput(transcript);
-      askFriday(transcript); // Send to brain
+      askFriday(transcript);
       setIsListening(false);
     };
     recognition.onerror = () => { setIsListening(false); setStatus("IDLE"); };
@@ -84,15 +116,14 @@ export default function WaveOS() {
     recognition.start();
   };
 
-  // --- THE BRAIN (DEBUG VERSION) ---
+  // --- THE BRAIN ---
   const askFriday = async (text) => {
     if (!geminiKey) return alert("Missing Gemini Key");
     setIsThinking(true);
     setStatus("THINKING");
 
     try {
-      // Using 'gemini-1.5-flash-latest' which is more stable
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${geminiKey}`, {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${geminiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -105,10 +136,8 @@ export default function WaveOS() {
 
       const data = await response.json();
 
-      // DEBUG: If Google sent an error, show it to the user
       if (data.error) {
-        console.error("Gemini Error:", data.error);
-        setDialogue(`API Error: ${data.error.message}`);
+        setDialogue(`Error: ${data.error.message}`);
         setStatus("WARN");
       } else {
         const reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -116,13 +145,13 @@ export default function WaveOS() {
       }
       
     } catch (e) {
-      setDialogue(`Network Error: ${e.message}`);
+      setDialogue(`Net Error: ${e.message}`);
       setStatus("WARN");
     }
     setIsThinking(false);
   };
 
-  // --- THE VOICE (ElevenLabs) ---
+  // --- THE VOICE ---
   const speak = async (id, dynamicText = "") => {
     setStatus("SPEAKING");
     setDialogue(dynamicText || "Processing...");
@@ -142,10 +171,7 @@ export default function WaveOS() {
         audioRef.current.play();
         audioRef.current.onended = () => setStatus("IDLE");
       }
-    } catch (e) { 
-      setStatus("WARN"); 
-      setDialogue("Audio System Failure.");
-    }
+    } catch (e) { setStatus("WARN"); setDialogue("Audio Module Failure."); }
   };
 
   return (
@@ -163,14 +189,26 @@ export default function WaveOS() {
 
       {/* ADMIN PANEL */}
       {showAdmin && (
-        <div className="absolute inset-0 z-50 bg-black/95 backdrop-blur-xl p-8 flex flex-col gap-4 animate-in slide-in-from-bottom duration-300">
-          <div className="flex justify-between items-center text-white">
-            <h2 className="text-xl font-bold flex items-center gap-2"><Database/> KEYS</h2>
+        <div className="absolute inset-0 z-50 bg-black/95 backdrop-blur-xl p-8 flex flex-col gap-4 animate-in slide-in-from-bottom duration-300 overflow-y-auto">
+          <div className="flex justify-between items-center text-white mb-2">
+            <h2 className="text-xl font-bold flex items-center gap-2"><Database/> SETTINGS</h2>
             <button onClick={() => setShowKeys(!showKeys)} className="p-2 hover:text-amber-500">{showKeys ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}</button>
           </div>
+          
+          <label className="text-[10px] uppercase opacity-50 font-bold">API KEYS</label>
           <input type={showKeys ? "text" : "password"} value={xiKey} onChange={(e) => { setXiKey(e.target.value); localStorage.setItem("XI_KEY", e.target.value); }} className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none font-mono" placeholder="ElevenLabs Key" />
-          <input type={showKeys ? "text" : "password"} value={xiVoice} onChange={(e) => { setXiVoice(e.target.value); localStorage.setItem("XI_VOICE", e.target.value); }} className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none font-mono" placeholder="Voice ID" />
           <input type={showKeys ? "text" : "password"} value={geminiKey} onChange={(e) => { setGeminiKey(e.target.value); localStorage.setItem("GEMINI_KEY", e.target.value); }} className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none font-mono" placeholder="Gemini API Key" />
+          <input type={showKeys ? "text" : "password"} value={xiVoice} onChange={(e) => { setXiVoice(e.target.value); localStorage.setItem("XI_VOICE", e.target.value); }} className="w-full bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none font-mono" placeholder="Voice ID" />
+          
+          <div className="h-px bg-amber-500/20 my-2"></div>
+          
+          <label className="text-[10px] uppercase opacity-50 font-bold">BRAIN MODEL</label>
+          <div className="flex gap-2">
+            <input type="text" value={modelName} onChange={(e) => { setModelName(e.target.value); localStorage.setItem("GEMINI_MODEL", e.target.value); }} className="flex-1 bg-amber-500/10 border border-amber-500/20 p-3 rounded text-sm outline-none font-mono" placeholder="gemini-1.5-flash" />
+            <button onClick={checkAvailableModels} className="bg-amber-600/20 border border-amber-500/30 p-3 rounded text-amber-500"><Server className="w-5 h-5"/></button>
+          </div>
+          <p className="text-[10px] opacity-50">Tap the server icon to auto-detect valid models.</p>
+
           <button onClick={() => setShowAdmin(false)} className="mt-auto py-6 text-xs uppercase opacity-50">[ CLOSE ]</button>
         </div>
       )}
