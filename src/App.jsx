@@ -4,10 +4,10 @@ import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc } from "firebase/firestore";
 import { 
   Shield, Wifi, Cpu, Lock, Unlock, Activity, 
-  Settings, Database, Mic, AlertTriangle, Radio, Terminal, Send, Eye, EyeOff, Scan, Server, Image as ImageIcon, Cloud, Save, Volume2, VolumeX, Play, Code, Sparkles, Brain, Zap, Mail, Bot
+  Settings, Database, Mic, AlertTriangle, Radio, Terminal, Send, Eye, EyeOff, Scan, Server, Image as ImageIcon, Cloud, Save, Volume2, VolumeX, Play, Code, Sparkles, Brain, Zap, Mail, Bot, ChevronLeft, Globe
 } from 'lucide-react';
 
-// --- FIREBASE CONFIG (PASTE YOURS) ---
+// --- FIREBASE CONFIG ---
 const firebaseConfig = {
   apiKey: "PASTE_FIREBASE_API_KEY_HERE",
   authDomain: "waveos-memory.firebaseapp.com",
@@ -60,9 +60,14 @@ export default function WaveOS() {
   // Credentials
   const [xiKey, setXiKey] = useState(() => localStorage.getItem("XI_KEY") || "");
   const [xiVoice, setXiVoice] = useState(() => localStorage.getItem("XI_VOICE") || "");
+  
+  // Brains
   const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem("GEMINI_KEY") || "");
   const [claudeKey, setClaudeKey] = useState(() => localStorage.getItem("CLAUDE_KEY") || "");
   const [openaiKey, setOpenaiKey] = useState(() => localStorage.getItem("OPENAI_KEY") || "");
+  const [grokKey, setGrokKey] = useState(() => localStorage.getItem("GROK_KEY") || "");
+  
+  // Tools
   const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem("GOOGLE_CLIENT_ID") || "");
   const [gmailToken, setGmailToken] = useState(null);
 
@@ -83,7 +88,7 @@ export default function WaveOS() {
     if (db && activeKeyId) await setDoc(doc(db, "users", activeKeyId), { bio: updatedBio, updated: new Date().toISOString() }, { merge: true });
   };
 
-  const connectGmail = () => { /* ... (Same Gmail Logic as v4) ... */
+  const connectGmail = () => {
     if (!googleClientId) return alert("Missing Google Client ID");
     const oauth2Endpoint = 'https://accounts.google.com/o/oauth2/v2/auth';
     const form = document.createElement('form');
@@ -113,30 +118,25 @@ export default function WaveOS() {
     } catch (e) { setDialogue("GMAIL ERROR."); setGmailToken(null); }
   };
 
-  // --- THE NEURAL DISPATCHER (ROUTER) ---
+  // --- NEURAL ROUTER ---
   const determineProvider = async (text) => {
-    // 1. Ask Gemini Flash to route the request (Fast & Cheap)
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: `Analyze request: "${text}". Classify as one of: [CODE, CREATIVE, GENERAL]. CODE = complex programming (Claude). CREATIVE = storytelling/reasoning (OpenAI). GENERAL = simple/facts (Gemini). Return ONLY the word.` }] }]
-        })
+        body: JSON.stringify({ contents: [{ parts: [{ text: `Classify "${text}" as: [CODE, CREATIVE, NEWS, GENERAL]. Return ONLY the word.` }] }] })
       });
       const data = await response.json();
-      const classification = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toUpperCase();
+      const cls = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim().toUpperCase();
       
-      if (classification?.includes("CODE") && claudeKey) return 'claude';
-      if (classification?.includes("CREATIVE") && openaiKey) return 'openai';
-      return 'gemini'; // Default
-    } catch (e) {
-      return 'gemini'; // Fallback
-    }
+      if (cls?.includes("CODE") && claudeKey) return 'claude';
+      if (cls?.includes("CREATIVE") && openaiKey) return 'openai';
+      if (cls?.includes("NEWS") && grokKey) return 'grok';
+      return 'gemini';
+    } catch (e) { return 'gemini'; }
   };
 
-  // --- BRAIN EXECUTION ---
   const callLLM = async (provider, text, imagePart = null) => {
-    const context = `You are F.R.I.D.A.Y. Context: ${userBio}. ${interfaceMode === 'LAB' ? 'Provide full code.' : 'Be concise.'} If learning a permanent fact, output [[MEMORY: fact]].`;
+    const context = `You are F.R.I.D.A.Y. Context: ${userBio}. ${interfaceMode === 'LAB' ? 'Provide full code.' : 'Be concise.'} If learning fact, output [[MEMORY: fact]].`;
     
     if (provider === 'gemini') {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${geminiKey}`, {
@@ -148,11 +148,8 @@ export default function WaveOS() {
     }
     
     if (provider === 'claude') {
-      // NOTE: Anthropic requires a proxy for browser usage usually. This is a direct attempt logic.
-      // If CORS fails, you must use a proxy. For now, we assume a CORS-friendly proxy or direct if allowed.
       const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'dangerously-allow-browser': 'true' },
+        method: 'POST', headers: { 'x-api-key': claudeKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'dangerously-allow-browser': 'true' },
         body: JSON.stringify({ model: "claude-3-sonnet-20240229", max_tokens: 2048, messages: [{ role: "user", content: text }], system: context })
       });
       const data = await response.json();
@@ -161,9 +158,17 @@ export default function WaveOS() {
 
     if (provider === 'openai') {
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: "gpt-4o", messages: [{ role: "system", content: context }, { role: "user", content: text }] })
+      });
+      const data = await response.json();
+      return data.choices?.[0]?.message?.content;
+    }
+
+    if (provider === 'grok') {
+      const response = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST', headers: { 'Authorization': `Bearer ${grokKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: "grok-beta", messages: [{ role: "system", content: context }, { role: "user", content: text }] })
       });
       const data = await response.json();
       return data.choices?.[0]?.message?.content;
@@ -173,13 +178,10 @@ export default function WaveOS() {
   const askFriday = async (text, imagePart = null) => {
     setIsThinking(true);
     setStatus("ROUTING...");
-    
     try {
-      // Step 1: Decide who handles it (only in Lab mode, Voice always uses Gemini for speed)
       const provider = interfaceMode === 'LAB' ? await determineProvider(text) : 'gemini';
       setStatus(`THINKING (${provider.toUpperCase()})`);
 
-      // Step 2: Execute
       const reply = await callLLM(provider, text, imagePart);
       
       if (reply) {
@@ -198,7 +200,7 @@ export default function WaveOS() {
     setIsThinking(false);
   };
 
-  // --- UTILS (Same as v4) ---
+  // --- UTILS ---
   const speak = async (id, dt) => { 
     setStatus("SPEAKING");
     try {
@@ -236,7 +238,6 @@ export default function WaveOS() {
         </div>
         <button onClick={() => setInterfaceMode("HUD")} className="p-2 bg-white/5 rounded-full"><Radio className="w-4 h-4 text-white/50"/></button>
       </div>
-
       <div className="flex-1 overflow-y-auto p-4 space-y-6 pb-32">
         {chatHistory.length === 0 && <div className="text-center text-white/20 mt-20"><Bot className="w-12 h-12 mx-auto mb-2 opacity-50"/>Ready to code, Boss.</div>}
         {chatHistory.map((msg, i) => (
@@ -246,14 +247,15 @@ export default function WaveOS() {
             </div>
             {msg.role === 'friday' && (
               <div className="flex items-center gap-2 mt-2 ml-2">
-                {/* MODEL ICON BADGE */}
                 <div className={`flex items-center gap-1 px-2 py-1 rounded-full text-[9px] uppercase tracking-wider font-bold ${
                   msg.model === 'claude' ? 'bg-orange-500/20 text-orange-300' :
                   msg.model === 'openai' ? 'bg-green-500/20 text-green-300' :
+                  msg.model === 'grok' ? 'bg-white/20 text-white' :
                   'bg-blue-500/20 text-blue-300'
                 }`}>
                   {msg.model === 'claude' ? <Brain className="w-3 h-3"/> :
                    msg.model === 'openai' ? <Zap className="w-3 h-3"/> :
+                   msg.model === 'grok' ? <Globe className="w-3 h-3"/> :
                    <Sparkles className="w-3 h-3"/>}
                   {msg.model}
                 </div>
@@ -264,7 +266,6 @@ export default function WaveOS() {
         ))}
         <div ref={chatEndRef} />
       </div>
-
       <div className="absolute bottom-0 w-full p-4 bg-[#1e1e1e] border-t border-white/5">
         <div className="relative bg-[#303030] rounded-full p-2 flex items-center shadow-lg border border-white/5">
           <button onClick={() => fileInputRef.current.click()} className="p-3 text-white/50 hover:text-white"><ImageIcon className="w-6 h-6"/></button>
@@ -275,14 +276,13 @@ export default function WaveOS() {
     </div>
   );
 
-  // --- HUD MODE ---
   return (
     <div className={`relative w-full h-screen bg-black ${status === 'WARN' ? 'text-red-500' : 'text-amber-500'} font-mono overflow-hidden flex flex-col items-center justify-center select-none`}>
       {interfaceMode === "LAB" ? <LabInterface /> : (
         <>
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,black_90%)] pointer-events-none"></div>
           <div className="absolute top-0 w-full p-6 flex justify-between items-center z-40">
-            <div className="flex gap-4 text-xs font-bold tracking-[0.2em] opacity-80"><Cpu className="w-3 h-3"/> FRIDAY v5.0</div>
+            <div className="flex gap-4 text-xs font-bold tracking-[0.2em] opacity-80"><Cpu className="w-3 h-3"/> FRIDAY v6.0</div>
             <div className="flex gap-4">
               <button onClick={() => setIsMuted(!isMuted)} className="opacity-50">{isMuted ? <VolumeX className="w-5 h-5 text-red-500"/> : <Volume2 className="w-5 h-5"/>}</button>
               <button onClick={() => setShowAdmin(!showAdmin)} className="opacity-50"><Settings className="w-5 h-5"/></button>
@@ -291,7 +291,7 @@ export default function WaveOS() {
 
           <div className="relative z-10 w-full max-w-md aspect-square flex items-center justify-center">
             <ReactorRing size="85%" speed={40} color={status === 'WARN' ? '#ef4444' : '#f59e0b'} dashed={true} />
-            <motion.div animate={{ rotate: 360, scale: [1, 1.05, 1] }} transition={{ rotate: { duration: 5, repeat: Infinity, ease: "linear" }, scale: { duration: 2, repeat: Infinity } }} className={`absolute w-[45%] h-[45%] border-2 rounded-full border-t-transparent border-l-transparent ${status === 'WARN' ? 'border-red-500' : 'border-amber-500'}`} />
+            <motion.div animate={{ rotate: 360, scale: [1, 1.05, 1] }} transition={{ rotate: { duration: 10, repeat: Infinity, ease: "linear" }, scale: { duration: 2, repeat: Infinity } }} className={`absolute w-[60%] h-[60%] border-2 rounded-full border-t-transparent border-l-transparent ${status === 'WARN' ? 'border-red-500' : 'border-amber-500'}`} />
             <div className="w-32 h-32 rounded-full flex items-center justify-center border border-current bg-opacity-10 backdrop-blur-md shadow-lg z-20">
               {status === "THINKING" ? <Activity className="w-12 h-12 animate-spin"/> : status === "LISTENING" ? <Mic className="w-12 h-12 animate-bounce"/> : <Radio className="w-12 h-12"/>}
             </div>
@@ -315,8 +315,12 @@ export default function WaveOS() {
 
       {showAdmin && (
         <div className="absolute inset-0 z-50 bg-black/95 backdrop-blur-xl p-8 flex flex-col gap-4 animate-in slide-in-from-bottom duration-300 overflow-y-auto">
-          <h2 className="text-xl font-bold flex items-center gap-2 text-white mb-4"><Database/> NEURAL CONFIG</h2>
-          <div className="space-y-3">
-            <input type="password" value={geminiKey} onChange={(e) => { setGeminiKey(e.target.value); localStorage.setItem("GEMINI_KEY", e.target.value); }} className="w-full bg-white/5 p-3 rounded text-xs font-mono" placeholder="Gemini Key" />
-            <input type="password" value={claudeKey} onChange={(e) => { setClaudeKey(e.target.value); localStorage.setItem("CLAUDE_KEY", e.target.value); }} className="w-full bg-white/5 p-3 rounded text-xs font-mono" placeholder="Anthropic Key (Claude)" />
-            <input type="password" value={openaiKey} onChange={(e) => { setOpenaiKey(e.target.value); localStorage.setItem("OPENAI_KEY"
+          <div className="flex justify-between items-center text-white mb-4">
+            <button onClick={() => setShowAdmin(false)} className="flex items-center gap-2 text-xs uppercase opacity-70 hover:opacity-100"><ChevronLeft className="w-4 h-4"/> BACK</button>
+            <h2 className="text-xl font-bold flex items-center gap-2"><Database/> NEURAL CONFIG</h2>
+            <button onClick={() => setShowKeys(!showKeys)} className="p-2 hover:text-amber-500">{showKeys ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}</button>
+          </div>
+          
+          <div className="p-4 border border-red-500/30 bg-red-500/10 rounded-lg mb-4">
+            <label className="text-[10px] uppercase text-red-400 font-bold mb-2 block">DEV OVERRIDE</label>
+            <button onClick={() => { s
